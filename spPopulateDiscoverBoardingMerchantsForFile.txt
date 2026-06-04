@@ -1,0 +1,166 @@
+USE [HCSdb]
+GO
+/****** Object:  StoredProcedure [dbo].[spPopulateDiscoverBoardingMerchantsForFile]    Script Date: 6/3/2026 2:11:52 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+/******************************************************************************************************
+Created By:			Chinnaiah Anugu
+Created Date:		11/14/2016
+
+Description:		Populate Discover Boarding Merchants For Export File
+
+Usage:				Discover Import Export Batch App
+
+Test:
+	EXEC [dbo].[spPopulateDiscoverBoardingMerchantsForFile]
+
+Modification Log:
+Date			Modified By			FR/SWD#			Comment
+-------------------------------------------------------------------------------------------------------
+11/14/2016		Chinnaiah Anugu		US73668			Created
+11/23/2016		Chinnaiah Anugu		US71398			Added new Columns IsRetainedMcc and DiscoverMerchantRecordCreatedDate
+12/07/2016		Chinnaiah Anugu		US73666			Added SubmissionTypeId column.
+01/12/2018		Chinnaiah Anugu		US77750			Added AcqBankId and AcquirerId columns.
+08/06/2018		Karunanidhi.K		US145714		Added DebitRepaymentIndicator for 2018.2 Compliance
+08/23/2021		Swapnil K			US250036		Added logic to restrict line break character in the DBAAddress1 and DBAAddress2
+09/27/2021      Nilima G	        US255233        Updated logic to restrict line break character in the DBAAddress1 and DBAAddress2
+02/27/2025		Mithun				US508112		Rename column DebitRepaymentIndicator to DebtRepaymentIndicator 
+*******************************************************************************************************/
+
+ALTER   PROCEDURE [dbo].[spPopulateDiscoverBoardingMerchantsForFile]
+AS
+
+BEGIN
+	-- Truncate existing records
+	TRUNCATE TABLE dbo.DiscoverBoardingMerchant
+
+	BEGIN TRY	
+		BEGIN TRANSACTION			
+						
+		INSERT INTO dbo.DiscoverBoardingMerchant (
+			DiscoverMerchantID,
+			PayPalMerchantID,
+			IsHPS,	
+			SequenceKey,	
+			ProcessorOID,
+			DiscoverSENumber,
+			PayPalSE,
+			AcquiringProgram,
+			MerchantName,
+			DBAAddress1,
+			DBAAddress2,	
+			DBACity,
+			DBAState,
+			DBAZip,
+			PhoneNbr,	
+			FirstName,
+			LastName,	
+			BusinessPrincipalHomeAddress1, 
+			BusinessPrincipalHomeAddress2, 
+			BusinessPrincipalHomeCity, 
+			BusinessPrincipalHomeState, 
+			BusinessPrincipalHomeZip,
+			FedTaxID,
+			LegalName,
+			LegalAddress1,
+			LegalAddress2,
+			LegalCity,
+			LegalState,
+			LegalZip,
+			SicCode,
+			DiscoverBusinessType,	
+			DiscoverOptOutReasonID,
+			OptOutReasonCategory,		
+			DiscoverCode,	
+			DiscoverStatusID,
+			DiscoverBatchActionID,	
+			SubmissionStatusId,
+			SentToDiscv,
+			OwnerSSNEncrypted,
+			MerchantStatus,
+			StatusDate,
+			DiscoverMerchantRecordCreatedDate,
+			IsRetainedMcc,
+			SubmissionTypeId,
+			AcqBankID,
+			AcquirerId,
+			DebtRepaymentIndicator)
+		SELECT TOP 100000
+			DiscoverMerchantID,
+			PayPalMerchantID,
+			IsHPS,	
+			SequenceKey,	
+			ProcessorOID,
+			DiscoverSENumber,
+			PayPalSE,
+			AcquiringProgram,
+			MerchantName,
+			REPLACE(REPLACE(DBAAddress1, CHAR(13), ' '), CHAR(10), ' '),
+			REPLACE(REPLACE(DBAAddress2, CHAR(13), ' '), CHAR(10), ' '),
+			DBACity,
+			DBAState,
+			DBAZip,
+			PhoneNbr,	
+			FirstName,
+			LastName,	
+			REPLACE(REPLACE(BusinessPrincipalHomeAddress1, CHAR(13), ' '), CHAR(10), ' '),
+			REPLACE(REPLACE(BusinessPrincipalHomeAddress2, CHAR(13), ' '), CHAR(10), ' '),
+			BusinessPrincipalHomeCity, 
+			BusinessPrincipalHomeState, 
+			BusinessPrincipalHomeZip,
+			FedTaxID,
+			LegalName,
+			LegalAddress1,
+			LegalAddress2,
+			LegalCity,
+			LegalState,
+			LegalZip,
+			SicCode,
+			DiscoverBusinessType,	
+			DiscoverOptOutReasonID,
+			OptOutReasonCategory,		
+			DiscoverCode,	
+			DiscoverStatusID,
+			DiscoverBatchActionID,	
+			SubmissionStatusId,
+			SentToDiscv,
+			OwnerSSNEncrypted,
+			MerchantStatus,
+			StatusDate,
+			DiscoverMerchantRecordCreatedDate,
+			IsRetainedMcc,
+			SubmissionTypeId,
+			AcqBankID,
+			AcquirerId,
+			DebtRepaymentIndicator
+		FROM [dbo].[vuDiscoverBoardingMerchant] WITH (NOLOCK)
+			WHERE SubmissionStatusId = 1 -- Submitting
+		ORDER BY DiscoverMerchantID DESC
+				
+		COMMIT TRANSACTION	
+	END TRY
+	BEGIN CATCH
+		IF @@TRANCOUNT > 0
+			ROLLBACK TRANSACTION
+
+		DECLARE @ErrorMessage NVARCHAR(4000)
+			, @ErrorSeverity INT
+			, @ErrorState INT
+
+		SELECT @ErrorMessage = ERROR_MESSAGE()
+			, @ErrorSeverity = ERROR_SEVERITY()
+			, @ErrorState = ERROR_STATE()
+
+		RAISERROR (@ErrorMessage, @ErrorSeverity, @ErrorState)
+	END CATCH
+END	
+
+
+
+

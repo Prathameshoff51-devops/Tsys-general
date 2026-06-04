@@ -1,0 +1,92 @@
+USE [HCSdb]
+GO
+/****** Object:  StoredProcedure [dbo].[spSetupDataForDiscoverMerchantFile]    Script Date: 6/3/2026 2:13:03 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+/******************************************************************************************************
+Created By:			Chinnaiah Anugu
+Created Date:		09/13/2016
+
+Description:		Setup data for Discover Merchant File
+
+Usage:				Discover Import Export Batch App
+
+Test:
+	EXEC [dbo].[spSetupDataForDiscoverMerchantFile]
+
+Modification Log:
+Date			Modified By			FR/SWD#			Comment
+-------------------------------------------------------------------------------------------------------
+09/13/2016		Chinnaiah Anugu		US70701			Created
+12/07/2016		Chinnaiah Anugu		US73666			Moved SubmissionTypeId compute logic into Batch App Code
+*******************************************************************************************************/
+
+ALTER PROCEDURE [dbo].[spSetupDataForDiscoverMerchantFile]
+AS
+
+BEGIN
+
+	DECLARE @CurrentRunDate DATETIME = GETUTCDATE()
+	DECLARE @SubmittingStatusId INT = 1 -- Submitting StatusId
+				
+	IF OBJECT_ID('tempdb..#tempData') IS NOT NULL DROP TABLE #tempData
+
+	SELECT
+		dbm.DiscoverMerchantId
+	INTO #tempData
+	FROM [dbo].[vuDiscoverBoardingMerchant] dbm
+	JOIN [dbo].[DiscoverMerchantBoardingChange] dbc ON dbc.DiscoverMerchantId = dbm.DiscoverMerchantId
+	WHERE dbc.IsChanged = 1 AND ISNULL(dbm.SubmissionStatusId, '') <> @SubmittingStatusId 	
+
+	BEGIN
+		BEGIN TRY	
+			BEGIN TRANSACTION			
+						
+			-- UPDATE CHANGES FIRST	
+			UPDATE s
+				SET [SubmissionStatusId] = @SubmittingStatusId,					
+					[SentDateUTC] = @CurrentRunDate,
+					[ReceivedDateUTC] = NULL
+			FROM [dbo].[DiscoverMerchantSubmission] s
+				JOIN #tempData t ON s.[DiscoverMerchantId] = t.[DiscoverMerchantId]
+			WHERE s.[DiscoverMerchantId] IS NOT NULL
+
+			-- INSERT NEW RECORDS LAST
+			INSERT INTO [dbo].[DiscoverMerchantSubmission]
+			   ([DiscoverMerchantId]
+			   ,[SubmissionStatusId]			
+			   ,[SentDateUTC]
+			   ,[ReceivedDateUTC])
+			SELECT 
+				t.DiscoverMerchantId
+				, @SubmittingStatusId			
+				, @CurrentRunDate
+				, NULL
+			FROM #tempData t
+			LEFT JOIN [dbo].[DiscoverMerchantSubmission] s WITH (NOLOCK) ON s.[DiscoverMerchantId] = t.[DiscoverMerchantId]
+			WHERE s.[DiscoverMerchantId] IS NULL
+				
+			COMMIT TRANSACTION	
+		END TRY
+		BEGIN CATCH
+			IF @@TRANCOUNT > 0
+				ROLLBACK TRANSACTION
+
+			DECLARE @ErrorMessage NVARCHAR(4000)
+				, @ErrorSeverity INT
+				, @ErrorState INT
+
+			SELECT @ErrorMessage = ERROR_MESSAGE()
+				, @ErrorSeverity = ERROR_SEVERITY()
+				, @ErrorState = ERROR_STATE()
+
+			RAISERROR (@ErrorMessage, @ErrorSeverity, @ErrorState)
+		END CATCH
+	END
+
+	-- Drop Temp Tables
+	DROP TABLE #tempData	
+END

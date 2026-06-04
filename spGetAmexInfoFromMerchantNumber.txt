@@ -1,0 +1,116 @@
+USE [HCSdb]
+GO
+/****** Object:  StoredProcedure [dbo].[spGetAmexInfoFromMerchantNumber]    Script Date: 6/3/2026 2:09:22 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+/******************************************************************************************************  
+ Created By:      JHuynh
+
+ Original Date:   07/21/2014	
+
+ Description:    Gets Amex info for the given merchant number
+
+ Test:			EXEC spGetAmexInfoFromMerchantNumber 650000004024413
+  
+ Used By:         Margin Editor
+ 
+ Modification Log:  
+ Date				Modified By       FR/SWD #				Comment  
+-------------------------------------------------------------------------------------------------------  
+07/21/2014		JHuynh			  					Created
+08/26/2014		CGibson								Added extra calculation logic and changed column names
+01/06/2016		Christie Kinslow	US58403 		Changed Dial from 0.025 to 0.0325 and IP from 0.015 to 0.0225
+02/24/2016		Christie Kinslow	US60243			Added check for RecdDate
+08/16/2017		Chinnaiah Anugu		US89068			Updated to Pull merchant with MAS Processor too
+*******************************************************************************************************/ 
+
+ALTER Procedure [dbo].[spGetAmexInfoFromMerchantNumber]
+		
+    @MerchantNumber VARCHAR(15)
+AS
+	DECLARE @MSK INT
+	DECLARE @MarginDate DATETIME = GETDATE()
+	DECLARE @AmexProgram VARCHAR(20)
+
+SET	@MSK = (SELECT SequenceKey FROM Merchants (NOLOCK) WHERE MerchantNumber = @MerchantNumber)
+
+SET @AmexProgram = (SELECT dbo.fGetAmexTargetProgram(@MSK))
+
+;WITH MerchantCommModes AS (
+	SELECT m.SequenceKey,
+		CASE WHEN MIN(ConnectivityTypeOID % 2) = 0 THEN 'IP' ELSE 'Dial' END AS CommMode
+	FROM		dbo.Merchants m WITH(NOLOCK)
+	INNER JOIN	dbo.hpstMercEquipReq mer WITH(NOLOCK) ON m.SequenceKey = mer.MerchantSequenceKey
+	INNER JOIN	dbo.hpstMercEquipment me WITH(NOLOCK) ON mer.MercEquipReqOID = me.MercEquipReqOID
+	INNER JOIN	dbo.hpstTerminals t		WITH(NOLOCK) ON me.MercEquipmentOID = t.MercEquipmentOID
+	WHERE t.ConnectivityTypeOID IS NOT NULL
+		AND ProcessorOID IN ('00000008', '00000010') -- Passport, MAS
+		AND Vendor IN ('HPSE', 'NWS')
+		AND SurchrgLevelOID = '00000006'
+		AND m.AmexNbr IS NOT NULL
+		AND @AmexProgram IN ('ESA', 'DIRECT', 'ESSP')
+		AND ISNULL(m.AutoReviewStatus, '') IN ('U', 'N') -- U indicates the merchant didn't have to go through any review, N indicates completion of autoreview.
+		AND ISNULL(m.DivisionID, '') != ''
+		AND ISNULL(m.MarketID, '') != ''
+		AND m.SequenceKey IN (@MSK)
+	GROUP BY m.SequenceKey
+)
+SELECT
+	CASE
+		WHEN coo.queuestatus = 'Approved' OR coo.queuestatus IS NULL THEN
+			CASE
+				WHEN m.RecdDate < '2016-01-01' THEN
+				--	For accounts received prior to 1/1/2016
+					CASE
+						WHEN @AmexProgram IN ('ESA', 'DIRECT')  OR  (@AmexProgram = 'ESSP' AND (m.AnnualVolume * (mma.PercentOfSales/100)) >= 500000) THEN
+							CASE
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'Dial' THEN
+									CAST(ISNULL(((m.AmexTxnFee - 0.025) * (m.AnnualVolume/NULLIF(m.AvgTicket, 0)) * (mma.PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'IP' THEN
+									CAST(ISNULL(((m.AmexTxnFee - 0.015) * (m.AnnualVolume/NULLIF(m.AvgTicket, 0)) * (mma.PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+							END
+						WHEN @AmexProgram = 'ESSP' AND (m.AnnualVolume * (mma.PercentOfSales/100)) < 500000 THEN
+							CASE
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'Dial' THEN
+									CAST(ISNULL((m.AnnualVolume * (mma.PercentOfSales/100) * .0030) + ((m.AmexTxnFee - 0.025)* (m.annualVolume/NULLIF(m.AvgTicket, 0)) * (PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'IP' THEN
+									CAST(ISNULL((m.AnnualVolume * (mma.PercentOfSales/100) * .0030) + ((m.AmexTxnFee - 0.015)* (m.annualVolume/NULLIF(m.AvgTicket, 0)) * (PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+							END
+					END
+				ELSE
+				--	For accounts received since 1/1/2016
+					CASE
+						WHEN @AmexProgram IN ('ESA', 'DIRECT')  OR  (@AmexProgram = 'ESSP' AND (m.AnnualVolume * (mma.PercentOfSales/100)) >= 500000) THEN
+							CASE
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'Dial' THEN
+									CAST(ISNULL(((m.AmexTxnFee - 0.0325) * (m.AnnualVolume/NULLIF(m.AvgTicket, 0)) * (mma.PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'IP' THEN
+									CAST(ISNULL(((m.AmexTxnFee - 0.0225) * (m.AnnualVolume/NULLIF(m.AvgTicket, 0)) * (mma.PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+							END
+						WHEN @AmexProgram = 'ESSP' AND (m.AnnualVolume * (mma.PercentOfSales/100)) < 500000 THEN
+							CASE
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'Dial' THEN
+									CAST(ISNULL((m.AnnualVolume * (mma.PercentOfSales/100) * .0030) + ((m.AmexTxnFee - 0.0325)* (m.annualVolume/NULLIF(m.AvgTicket, 0)) * (PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+								WHEN m.AmexNbr IS NOT NULL AND mcm.CommMode = 'IP' THEN
+									CAST(ISNULL((m.AnnualVolume * (mma.PercentOfSales/100) * .0030) + ((m.AmexTxnFee - 0.0225)* (m.annualVolume/NULLIF(m.AvgTicket, 0)) * (PercentOfTransactions/100)), 0) AS DECIMAL(18, 2))
+							END
+					END
+			END
+		ELSE 0
+	END MarginAmt
+FROM Merchants m WITH(NOLOCK)
+INNER JOIN	MerchantCommModes	AS mcm  WITH(NOLOCK) ON m.SequenceKey = mcm.SequenceKey
+INNER JOIN	MarginMappingAmex	AS mma  WITH(NOLOCK) ON m.SICCode = mma.SicCode AND @MarginDate BETWEEN mma.StartDate AND ISNULL(mma.EndDate, '12/31/9999')
+INNER JOIN	dbo.SOManagerClient	AS somc WITH(NOLOCK) ON somc.HPSClientID = m.SequenceKey AND m.FirstDepositdate BETWEEN somc.DateBegin AND somc.DateEnd
+INNER JOIN	dbo.SOManagerArea	AS soma WITH(NOLOCK) ON somc.SOManagerAreaID = soma.ID
+LEFT JOIN	vuCOOQueueClientStatus AS coo WITH (NOLOCK) ON m.SequenceKey = coo.HPSClientId
+
+WHERE	somc.SOProductID = 1
+AND		somc.SORoleTypeID = 4
+AND		ISNULL(coo.queuestatus, 'Approved') NOT IN ('Pending','New')
+AND		m.SequenceKey IN (@MSK)
+

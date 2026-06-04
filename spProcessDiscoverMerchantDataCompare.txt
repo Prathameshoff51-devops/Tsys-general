@@ -1,0 +1,139 @@
+
+USE [HCSdb]
+GO
+/****** Object:  StoredProcedure [dbo].[spProcessDiscoverMerchantDataCompare]    Script Date: 6/3/2026 2:12:31 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+/******************************************************************************************************
+Created By:			Chinnaiah Anugu
+Created Date:		8/18/2016
+
+Description:		Process Discover Merchant Data Compare
+
+Usage:				Discover Import Export Batch App
+
+Test:
+	EXEC [dbo].[spProcessDiscoverMerchantDataCompare]
+
+Modification Log:
+Date			Modified By			FR/SWD#			Comment
+-------------------------------------------------------------------------------------------------------
+08/18/2016		Chinnaiah Anugu		US70701			Created
+09/12/2016		Chinnaiah Anugu		US70701			Made following updates:
+														- Removed unwanted columns from Hash value compare
+														- Added WHERE clause on SubmissionStatusId
+09/27/2016		Chinnaiah Anugu		US72278			Added Business Principal Home Address Info columns for Hash value compare
+*******************************************************************************************************/
+
+ALTER PROCEDURE [dbo].[spProcessDiscoverMerchantDataCompare]
+AS
+
+BEGIN
+
+	DECLARE @CurrentRunDate DATETIME = GETUTCDATE()				
+	IF OBJECT_ID('tempdb..#tempData') IS NOT NULL DROP TABLE #tempData
+	
+	SELECT
+		dbm.DiscoverMerchantID,	
+		[Hash] = HASHBYTES('SHA2_256',
+		COALESCE(CONVERT(VARCHAR(10), dbm.PayPalMerchantID), '') + ',' +
+		COALESCE(CONVERT(VARCHAR(1), dbm.IsHPS), '') + ',' +
+		COALESCE(CONVERT(VARCHAR(12), dbm.SequenceKey), '') + ',' +
+		COALESCE(dbm.ProcessorOID, '') + ',' +
+		COALESCE(dbm.DiscoverSENumber, '') + ',' +
+		COALESCE(dbm.PayPalSE, '') + ',' +
+		COALESCE(dbm.AcquiringProgram, '') + ',' +
+		COALESCE(dbm.MerchantName, '') + ',' +
+		COALESCE(dbm.DBAAddress1, '') + ',' +
+		COALESCE(dbm.DBAAddress2, '') + ',' +			
+		COALESCE(dbm.DBACity, '') + ',' +
+		COALESCE(dbm.DBAState, '') + ',' +
+		COALESCE(dbm.DBAZip, '') + ',' +
+		COALESCE(dbm.PhoneNbr, '') + ',' +
+		COALESCE(dbm.FirstName, '') + ',' +
+		COALESCE(dbm.LastName, '') + ',' +
+		COALESCE(dbm.BusinessPrincipalHomeAddress1, '') + ',' +
+		COALESCE(dbm.BusinessPrincipalHomeAddress2, '') + ',' +
+		COALESCE(dbm.BusinessPrincipalHomeCity, '') + ',' +
+		COALESCE(dbm.BusinessPrincipalHomeState, '') + ',' +
+		COALESCE(dbm.BusinessPrincipalHomeZip, '') + ',' +	
+		COALESCE(dbm.FedTaxID, '') + ',' +
+		COALESCE(dbm.LegalName, '') + ',' +
+		COALESCE(dbm.LegalAddress1, '') + ',' +
+		COALESCE(dbm.LegalAddress2, '') + ',' +
+		COALESCE(dbm.LegalCity, '') + ',' +
+		COALESCE(dbm.LegalState, '') + ',' +
+		COALESCE(dbm.LegalZip, '') + ',' +
+		COALESCE(dbm.SicCode, '') + ',' +
+		COALESCE(dbm.DiscoverBusinessType, '') + ',' +			
+		COALESCE(CONVERT(VARCHAR(10), dbm.DiscoverOptOutReasonID), '') + ',' +		
+		COALESCE(CONVERT(VARCHAR(10), dbm.OptOutReasonCategory), '') + ',' +
+		COALESCE(CONVERT(VARCHAR(10), dbm.DiscoverCode), '')
+		)
+	INTO #tempData
+	FROM [dbo].[vuDiscoverBoardingMerchant] dbm
+	WHERE ISNULL(dbm.SubmissionStatusId, '') <> 1 -- Submitting StatusId
+
+	BEGIN
+		BEGIN TRY	
+			BEGIN TRANSACTION
+					
+			--UPDATES NO CHANGES FIRST
+			UPDATE b
+			SET [IsChanged] = 0 -- Not Changed
+				, [LastComparedDateUTC] = @CurrentRunDate
+			FROM [dbo].[DiscoverMerchantBoardingChange] b
+			JOIN #tempData f ON b.[DiscoverMerchantID] = f.[DiscoverMerchantID]
+			WHERE b.[Hash] = f.[Hash]
+
+			--UPDATES DELTAS NEXT
+			UPDATE b
+			SET [Hash] = f.[Hash]
+				, [IsChanged] = 1 -- Changed	
+				, [LastComparedDateUTC] = @CurrentRunDate
+			FROM [dbo].[DiscoverMerchantBoardingChange] b
+			JOIN #tempData f ON b.[DiscoverMerchantID] = f.[DiscoverMerchantID]
+			WHERE b.[Hash] != f.[Hash]
+
+			--INSERT NEW RECORDS LAST
+			INSERT INTO [dbo].[DiscoverMerchantBoardingChange]
+				([DiscoverMerchantID]
+				,[Hash]
+				,[IsChanged]
+				,[CreatedDateUTC]
+				,[LastComparedDateUTC])
+			SELECT 
+				f.DiscoverMerchantID
+				, f.[Hash]
+				, 1 -- Changed
+				, GETUTCDATE()
+				, @CurrentRunDate
+			FROM #tempData f
+			LEFT JOIN [dbo].[DiscoverMerchantBoardingChange] b WITH (NOLOCK) ON b.[DiscoverMerchantID] = f.[DiscoverMerchantID]
+			WHERE b.[DiscoverMerchantID] IS NULL			
+			
+			COMMIT TRANSACTION		
+		END TRY
+		BEGIN CATCH			
+			IF @@TRANCOUNT > 0
+				ROLLBACK TRANSACTION
+
+			DECLARE @ErrorMessage NVARCHAR(4000)
+				, @ErrorSeverity INT
+				, @ErrorState INT
+
+			SELECT @ErrorMessage = ERROR_MESSAGE()
+				, @ErrorSeverity = ERROR_SEVERITY()
+				, @ErrorState = ERROR_STATE()
+
+			RAISERROR (@ErrorMessage, @ErrorSeverity, @ErrorState)			
+		END CATCH
+	END
+
+	-- Drop Temp Tables
+	DROP TABLE #tempData
+END
+
